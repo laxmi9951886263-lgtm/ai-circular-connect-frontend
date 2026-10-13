@@ -2,10 +2,14 @@
 import { useEffect, useState } from "react";
 import "./App.css";
 
- 
-const API = "https://ai-circular-connect-backend-1.onrender.com/api/products";
-const CLASSIFIER_API = "https://ai-circular-connect-backend-1.onrender.com/api/classifier/analyze";
-const IMAGE_API = "https://ai-circular-connect-backend-1.onrender.com/api/items";
+const API =
+  "https://ai-circular-connect-backend-1.onrender.com/api/products";
+const CLASSIFIER_API =
+  "https://ai-circular-connect-backend-1.onrender.com/api/classifier/analyze";
+const IMAGE_API =
+  "https://ai-circular-connect-backend-1.onrender.com/api/items";
+const AUTH_API =
+  "https://ai-circular-connect-backend-1.onrender.com/api/auth";
 
 const categories = [
   "All",
@@ -114,16 +118,16 @@ function App() {
   const [image, setImage] = useState(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState(null);
-  
-const savedAnalysisFallback = {
-  savedItemId: 15,
-  itemName: "Stack of Hardcover and Paperback Books",
-  classification: "REUSABLE",
-  estimatedValueInr: 500,
-  reason:
-    "The books appear to be in clean, intact physical condition with solid bindings and undamaged covers, making them well-suited for further reading.",
-};
 
+  // Authentication state: only one declaration of each state
+  const [authMode, setAuthMode] = useState("login");
+  const [authName, setAuthName] = useState("");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authToken, setAuthToken] = useState(
+    () => localStorage.getItem("aicc_token") || ""
+  );
+  const [authMessage, setAuthMessage] = useState("");
 
   const [chatInput, setChatInput] = useState("");
   const [chatMessages, setChatMessages] = useState([
@@ -132,6 +136,68 @@ const savedAnalysisFallback = {
       text: "Hi! 🌱 Ask me about reusing items, recycling, or sustainable choices.",
     },
   ]);
+
+  async function handleAuthSubmit(event) {
+    event.preventDefault();
+    setAuthMessage("");
+
+    try {
+      if (authMode === "register") {
+        const registerResponse = await fetch(`${AUTH_API}/register`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fullName: authName.trim(),
+            email: authEmail.trim(),
+            password: authPassword,
+          }),
+        });
+
+        const registerData = await registerResponse
+          .json()
+          .catch(() => ({}));
+
+        if (!registerResponse.ok) {
+          throw new Error(
+            registerData.message ||
+              registerData.error ||
+              "Registration failed."
+          );
+        }
+      }
+
+      const response = await fetch(`${AUTH_API}/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: authEmail.trim(),
+          password: authPassword,
+        }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok || !data.token) {
+        throw new Error(
+          data.message || data.error || "Login failed. Check your details."
+        );
+      }
+
+      localStorage.setItem("aicc_token", data.token);
+      setAuthToken(data.token);
+      setAuthPassword("");
+      setAuthMessage("Login successful! You can now analyze and publish items.");
+    } catch (error) {
+      setAuthMessage(error.message || "Authentication request failed.");
+    }
+  }
+
+  function handleLogout() {
+    localStorage.removeItem("aicc_token");
+    setAuthToken("");
+    setAuthPassword("");
+    setAuthMessage("You have logged out.");
+  }
 
   async function loadProducts() {
     setLoading(true);
@@ -145,13 +211,12 @@ const savedAnalysisFallback = {
       }
 
       const data = await response.json();
-
       setProducts(Array.isArray(data) ? data : []);
       setApiMessage("Connected to your Java marketplace");
     } catch {
       setProducts(sampleProducts);
       setApiMessage(
-        "Showing demo products. Start your Java backend to load real listings."
+        "Showing demo products. Live marketplace connection is unavailable."
       );
     } finally {
       setLoading(false);
@@ -174,6 +239,15 @@ const savedAnalysisFallback = {
     event.preventDefault();
     setNotice("");
 
+    if (!authToken) {
+      setNotice("Please log in before publishing a listing.");
+      document.getElementById("account")?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+      return;
+    }
+
     const payload = {
       title: title.trim(),
       description: description.trim(),
@@ -190,20 +264,41 @@ const savedAnalysisFallback = {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
         },
         body: JSON.stringify(payload),
       });
 
-      if (!response.ok) {
-        const message = await response.text();
-        throw new Error(message || `Request failed (${response.status})`);
+      const responseText = await response.text();
+      let data = {};
+
+      try {
+        data = responseText ? JSON.parse(responseText) : {};
+      } catch {
+        data = {};
       }
 
-      const savedProduct = await response.json();
+      if (response.status === 401 || response.status === 403) {
+        throw new Error(
+          "Your login may have expired or your account is not authorized. Please log in again."
+        );
+      }
 
-      setProducts((current) => [savedProduct, ...current]);
+      if (!response.ok) {
+        throw new Error(
+          data.message ||
+            data.error ||
+            responseText ||
+            `Request failed (${response.status})`
+        );
+      }
+
+      setProducts((current) => [
+        data,
+        ...current.filter((product) => product.id !== data.id),
+      ]);
       setCategory("All");
-      setNotice("Your product listing was saved successfully!");
+      setNotice("Your product listing was published successfully!");
 
       setTitle("");
       setDescription("");
@@ -213,14 +308,23 @@ const savedAnalysisFallback = {
       setProductCategory("Furniture");
       setCondition("GOOD");
       setListingType("SELL");
+
+      await loadProducts();
     } catch (error) {
-      setNotice(
-        `Could not save listing: ${error.message}. Check the Java backend and marketplace API.`
-      );
+      setNotice(`Could not publish listing: ${error.message}`);
     }
   }
 
   async function handleAnalyzeImage() {
+    if (!authToken) {
+      setNotice("Please log in before analyzing an image.");
+      document.getElementById("account")?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+      return;
+    }
+
     if (!image) {
       setNotice("Please choose a product image first.");
       return;
@@ -236,29 +340,36 @@ const savedAnalysisFallback = {
 
       const response = await fetch(CLASSIFIER_API, {
         method: "POST",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
         body: formData,
       });
 
       const data = await response.json().catch(() => ({}));
 
+      if (response.status === 401 || response.status === 403) {
+        throw new Error(
+          "Login is required or your session has expired. Please log in again."
+        );
+      }
+
       if (!response.ok) {
         throw new Error(
-          data.message || data.error || `Request failed (${response.status})`
+          data.message ||
+            data.error ||
+            `Image analysis failed (${response.status})`
         );
       }
 
       setAnalysisResult(data);
-      setNotice("Image analyzed and saved successfully!");
+      setNotice("Image analyzed successfully!");
     } catch (error) {
-      setNotice(
-        `Image analysis failed: ${error.message}. Check the backend and browser console.`
-      );
+      setNotice(`Image analysis failed: ${error.message}`);
     } finally {
       setAnalyzing(false);
     }
   }
-  
-
 
   function handleUseAnalysis() {
     const result = analysisResult;
@@ -310,7 +421,7 @@ const savedAnalysisFallback = {
     setImageUrl(`${IMAGE_API}/${result.savedItemId}/image`);
 
     setNotice(
-      "Image analysis details added to the listing form. Review them before publishing."
+      "AI results added to the listing form. Review the details and publish."
     );
 
     document.getElementById("list-product")?.scrollIntoView({
@@ -318,8 +429,6 @@ const savedAnalysisFallback = {
       block: "start",
     });
   }
-
-
 
   function handleChat(event) {
     event.preventDefault();
@@ -371,36 +480,131 @@ const savedAnalysisFallback = {
         </a>
 
         <nav className="nav-links">
-          <a className="active" href="#home">
-            Home
-          </a>
+          <a className="active" href="#home">Home</a>
           <a href="#marketplace">Marketplace</a>
           <a href="#classify">Upload &amp; Classify</a>
           <a href="#about">About</a>
+          <a href="#account">Account</a>
         </nav>
 
-        <a className="nav-button" href="#list-product">
-          ＋ Add Listing
-        </a>
+        <a className="nav-button" href="#list-product">＋ Add Listing</a>
       </header>
 
       <main>
+        <section className="section" id="account">
+          <div
+            className="upload-card"
+            style={{ maxWidth: "520px", margin: "24px auto" }}
+          >
+            {authToken ? (
+              <>
+                <h3>🌱 Your account</h3>
+                <p>You are logged in and can use protected features.</p>
+                <button
+                  type="button"
+                  className="primary-button full-button"
+                  onClick={handleLogout}
+                >
+                  Logout
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="upload-card-heading">
+                  <span className="upload-icon">♙</span>
+                  <div>
+                    <h3>{authMode === "login" ? "Welcome back" : "Create an account"}</h3>
+                    <p>
+                      {authMode === "login"
+                        ? "Log in to analyze images and publish listings."
+                        : "Register to join the circular marketplace."}
+                    </p>
+                  </div>
+                </div>
+
+                <form onSubmit={handleAuthSubmit} className="listing-form">
+                  {authMode === "register" && (
+                    <label className="wide-field">
+                      Full name
+                      <input
+                        required
+                        maxLength="100"
+                        value={authName}
+                        onChange={(event) => setAuthName(event.target.value)}
+                        placeholder="Enter your full name"
+                      />
+                    </label>
+                  )}
+
+                  <label className="wide-field">
+                    Email
+                    <input
+                      required
+                      type="email"
+                      value={authEmail}
+                      onChange={(event) => setAuthEmail(event.target.value)}
+                      placeholder="you@example.com"
+                    />
+                  </label>
+
+                  <label className="wide-field">
+                    Password
+                    <input
+                      required
+                      type="password"
+                      minLength="8"
+                      maxLength="72"
+                      value={authPassword}
+                      onChange={(event) => setAuthPassword(event.target.value)}
+                      placeholder="At least 8 characters"
+                    />
+                  </label>
+
+                  <button
+                    className="primary-button submit-button"
+                    type="submit"
+                  >
+                    {authMode === "login" ? "Login" : "Register"}
+                  </button>
+                </form>
+
+                <p style={{ textAlign: "center", marginTop: "14px" }}>
+                  {authMode === "login"
+                    ? "Don't have an account?"
+                    : "Already registered?"}{" "}
+                  <button
+                    type="button"
+                    className="text-link"
+                    onClick={() => {
+                      setAuthMode(authMode === "login" ? "register" : "login");
+                      setAuthMessage("");
+                    }}
+                  >
+                    {authMode === "login" ? "Register" : "Login"}
+                  </button>
+                </p>
+              </>
+            )}
+
+            {authMessage && (
+              <p role="status" style={{ marginTop: "12px" }}>
+                {authMessage}
+              </p>
+            )}
+          </div>
+        </section>
+
         <section className="hero" id="home">
           <div className="hero-copy">
-            <span className="eyebrow">
-              🌱 SMALL ACTIONS, BIG IMPACT
-            </span>
-
+            <span className="eyebrow">🌱 SMALL ACTIONS, BIG IMPACT</span>
             <h1>
               Give your items
               <br />a <span>second life.</span>
             </h1>
-
             <p>
               Turn unwanted things into new opportunities. Reuse, recycle,
               and reconnect with a smarter, more sustainable community.
             </p>
-
             <div className="hero-actions">
               <a className="primary-button" href="#marketplace">
                 Explore Marketplace <span>→</span>
@@ -409,7 +613,6 @@ const savedAnalysisFallback = {
                 ✧ Classify an Item
               </a>
             </div>
-
             <div className="hero-proof">
               <span>✓ Give products a second life</span>
               <span>✓ Reduce unnecessary waste</span>
@@ -435,60 +638,37 @@ const savedAnalysisFallback = {
         <section className="impact-strip" id="about">
           <div>
             <strong>♻</strong>
-            <span>
-              <b>Circular Living</b>
-              <small>Keep useful items in use</small>
-            </span>
+            <span><b>Circular Living</b><small>Keep useful items in use</small></span>
           </div>
           <div>
             <strong>🌍</strong>
-            <span>
-              <b>Less Waste</b>
-              <small>Make more mindful choices</small>
-            </span>
+            <span><b>Less Waste</b><small>Make more mindful choices</small></span>
           </div>
           <div>
             <strong>🤝</strong>
-            <span>
-              <b>Community First</b>
-              <small>Connect people and products</small>
-            </span>
+            <span><b>Community First</b><small>Connect people and products</small></span>
           </div>
           <div>
             <strong>✦</strong>
-            <span>
-              <b>AI Assisted</b>
-              <small>Smarter reuse decisions</small>
-            </span>
+            <span><b>AI Assisted</b><small>Smarter reuse decisions</small></span>
           </div>
         </section>
 
         <section className="market-section section" id="marketplace">
           <div className="section-heading">
             <div>
-              <span className="eyebrow">
-                DISCOVER SOMETHING USEFUL
-              </span>
-              <h2>
-                The circular <span>marketplace</span>
-              </h2>
-              <p>
-                Pre-loved items, new possibilities. Find something or pass it on.
-              </p>
+              <span className="eyebrow">DISCOVER SOMETHING USEFUL</span>
+              <h2>The circular <span>marketplace</span></h2>
+              <p>Pre-loved items, new possibilities. Find something or pass it on.</p>
             </div>
-
-            <a href="#list-product" className="text-link">
-              ＋ List an item
-            </a>
+            <a href="#list-product" className="text-link">＋ List an item</a>
           </div>
 
           <div className="category-list">
             {categories.map((item) => (
               <button
                 key={item}
-                className={`category-chip ${
-                  category === item ? "selected" : ""
-                }`}
+                className={`category-chip ${category === item ? "selected" : ""}`}
                 onClick={() => setCategory(item)}
               >
                 {item}
@@ -512,89 +692,49 @@ const savedAnalysisFallback = {
             <div className="product-grid">
               {filteredProducts.map((product, index) => (
                 <article className="product-card" key={product.id}>
-                 
-<div
-  className={`product-art ${
-    ["mint", "sand", "lavender"][index % 3]
-  }`}
->
-  {product.imageUrl ? (
-    <img
-      src={product.imageUrl}
-      alt={product.title}
-      style={{
-        display: "block",
-        width: "100%",
-        height: "100%",
-        objectFit: "cover",
-      }}
-      onError={(event) => {
-        event.currentTarget.style.display = "none";
+                  <div className={`product-art ${["mint", "sand", "lavender"][index % 3]}`}>
+                    {product.imageUrl && (
+                      <img
+                        src={product.imageUrl}
+                        alt={product.title}
+                        style={{
+                          display: "block",
+                          width: "100%",
+                          height: "100%",
+                          objectFit: "cover",
+                        }}
+                        onError={(event) => {
+                          event.currentTarget.style.display = "none";
+                          const fallback = event.currentTarget.parentElement?.querySelector(".product-emoji");
+                          if (fallback) fallback.style.display = "inline-flex";
+                        }}
+                      />
+                    )}
+                    <span
+                      className="product-emoji"
+                      style={{ display: product.imageUrl ? "none" : "inline-flex" }}
+                    >
+                      {getSymbol(product)}
+                    </span>
+                    <span className={`listing-badge ${product.listingType === "DONATE" ? "donate" : ""}`}>
+                      {product.listingType === "DONATE" ? "💚 Free / Donate" : "↗ For Sale"}
+                    </span>
+                  </div>
 
-        const fallback =
-          event.currentTarget.parentElement?.querySelector(
-            ".product-emoji"
-          );
-
-        if (fallback) {
-          fallback.style.display = "inline-flex";
-        }
-      }}
-    />
-  ) : null}
-
-  <span
-    className="product-emoji"
-    style={{
-      display: product.imageUrl ? "none" : "inline-flex",
-    }}
-  >
-    {getSymbol(product)}
-  </span>
-
-  <span
-    className={`listing-badge ${
-      product.listingType === "DONATE" ? "donate" : ""
-    }`}
-  >
-    {product.listingType === "DONATE"
-      ? "💚 Free / Donate"
-      : "↗ For Sale"}
-  </span>
-</div>
-
-
-                  
-<div className="product-info">
-  <div className="product-meta">
-    <span>{product.category}</span>
-    <span>{product.itemCondition || "Pre-loved"}</span>
-  </div>
-
-  <h3>{product.title}</h3>
-
-
-                    
-
-                    <p>
-                      {product.description || "Give this item a new home."}
-                    </p>
-
+                  <div className="product-info">
+                    <div className="product-meta">
+                      <span>{product.category}</span>
+                      <span>{product.itemCondition || "Pre-loved"}</span>
+                    </div>
+                    <h3>{product.title}</h3>
+                    <p>{product.description || "Give this item a new home."}</p>
                     <div className="product-bottom">
                       <strong>
-                        {product.listingType === "DONATE"
-                          ? "Free"
-                          : formatPrice(product.price)}
+                        {product.listingType === "DONATE" ? "Free" : formatPrice(product.price)}
                       </strong>
-
-                      
-<button
-  className="view-button"
-  onClick={() => setSelectedProduct(product)}
->
-  View item →
-</button>
-
+                      <button className="view-button" onClick={() => setSelectedProduct(product)}>
+                        View item →
+                      </button>
                     </div>
                   </div>
                 </article>
@@ -603,54 +743,32 @@ const savedAnalysisFallback = {
           )}
         </section>
 
-
-{selectedProduct && (
-  <div className="product-modal-overlay">
-    <div className="product-modal" role="dialog" aria-modal="true">
-      <button
-        className="modal-close"
-        onClick={() => setSelectedProduct(null)}
-      >
-        ×
-      </button>
-
-      <h2>{selectedProduct.title}</h2>
-      <p>{selectedProduct.description || "Give this item a new home."}</p>
-      <p>Category: {selectedProduct.category || "Other"}</p>
-      <p>Condition: {selectedProduct.itemCondition || "Pre-loved"}</p>
-      <h3>
-        {selectedProduct.listingType === "DONATE"
-          ? "Free"
-          : formatPrice(selectedProduct.price)}
-      </h3>
-
-      <button
-        className="view-button"
-        onClick={() => setSelectedProduct(null)}
-      >
-        Close details
-      </button>
-    </div>
-  </div>
-)}
+        {selectedProduct && (
+          <div className="product-modal-overlay">
+            <div className="product-modal" role="dialog" aria-modal="true">
+              <button className="modal-close" onClick={() => setSelectedProduct(null)}>×</button>
+              <h2>{selectedProduct.title}</h2>
+              <p>{selectedProduct.description || "Give this item a new home."}</p>
+              <p>Category: {selectedProduct.category || "Other"}</p>
+              <p>Condition: {selectedProduct.itemCondition || "Pre-loved"}</p>
+              <h3>
+                {selectedProduct.listingType === "DONATE" ? "Free" : formatPrice(selectedProduct.price)}
+              </h3>
+              <button className="view-button" onClick={() => setSelectedProduct(null)}>
+                Close details
+              </button>
+            </div>
+          </div>
+        )}
 
         <section className="feature-section section" id="classify">
           <div className="feature-copy">
-            <span className="eyebrow">
-              MEET YOUR AI RECYCLING GUIDE
-            </span>
-
-            <h2>
-              Not sure what to do
-              <br />
-              with your <span>old items?</span>
-            </h2>
-
+            <span className="eyebrow">MEET YOUR AI RECYCLING GUIDE</span>
+            <h2>Not sure what to do<br />with your <span>old items?</span></h2>
             <p>
               Image-based AI classification and potential value estimation
               will help you make a more informed decision about your item.
             </p>
-
             <ul>
               <li>✓ Identify reusable or recyclable items</li>
               <li>✓ Explore estimated resale potential</li>
@@ -676,7 +794,6 @@ const savedAnalysisFallback = {
                   setAnalysisResult(null);
                 }}
               />
-
               {image ? (
                 <>
                   <span className="upload-large">🖼️</span>
@@ -704,25 +821,11 @@ const savedAnalysisFallback = {
             {analysisResult && (
               <div className="classifier-result">
                 <h3>AI Analysis Result</h3>
-
-                <p>
-                  <strong>Item:</strong> {analysisResult.itemName}
-                </p>
-                <p>
-                  <strong>Classification:</strong>{" "}
-                  {analysisResult.classification}
-                </p>
-                <p>
-                  <strong>Estimated value:</strong> ₹
-                  {analysisResult.estimatedValueInr}
-                </p>
-                <p>
-                  <strong>Reason:</strong> {analysisResult.reason}
-                </p>
-                <p>
-                  <strong>Saved item ID:</strong> {analysisResult.savedItemId}
-                </p>
-
+                <p><strong>Item:</strong> {analysisResult.itemName}</p>
+                <p><strong>Classification:</strong> {analysisResult.classification}</p>
+                <p><strong>Estimated value:</strong> ₹{analysisResult.estimatedValueInr}</p>
+                <p><strong>Reason:</strong> {analysisResult.reason}</p>
+                <p><strong>Saved item ID:</strong> {analysisResult.savedItemId}</p>
                 {analysisResult.savedItemId && (
                   <img
                     className="analyzed-image"
@@ -730,16 +833,13 @@ const savedAnalysisFallback = {
                     alt={analysisResult.itemName || "Analyzed item"}
                   />
                 )}
-                
-               
-<button
-  type="button"
-  className="primary-button full-button"
-  onClick={handleUseAnalysis}
->
-  ＋ List this item
-</button>
-
+                <button
+                  type="button"
+                  className="primary-button full-button"
+                  onClick={handleUseAnalysis}
+                >
+                  ＋ List this item
+                </button>
               </div>
             )}
 
@@ -749,44 +849,24 @@ const savedAnalysisFallback = {
             </p>
           </div>
 
-          <form
-            className="listing-form"
-            id="list-product"
-            onSubmit={handleSubmit}
-          >
+          <form className="listing-form" id="list-product" onSubmit={handleSubmit}>
             <label>
               Product title
-              <input
-                required
-                maxLength="150"
-                value={title}
-                onChange={(event) => setTitle(event.target.value)}
-                placeholder="e.g. Study Table"
-              />
+              <input required maxLength="150" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="e.g. Study Table" />
             </label>
 
             <label>
               Category
-              <select
-                value={productCategory}
-                onChange={(event) => setProductCategory(event.target.value)}
-              >
-                {categories
-                  .filter((item) => item !== "All")
-                  .map((item) => (
-                    <option key={item} value={item}>
-                      {item}
-                    </option>
-                  ))}
+              <select value={productCategory} onChange={(event) => setProductCategory(event.target.value)}>
+                {categories.filter((item) => item !== "All").map((item) => (
+                  <option key={item} value={item}>{item}</option>
+                ))}
               </select>
             </label>
 
             <label>
               Condition
-              <select
-                value={condition}
-                onChange={(event) => setCondition(event.target.value)}
-              >
+              <select value={condition} onChange={(event) => setCondition(event.target.value)}>
                 <option value="LIKE_NEW">Like New</option>
                 <option value="GOOD">Good</option>
                 <option value="FAIR">Fair</option>
@@ -796,21 +876,12 @@ const savedAnalysisFallback = {
 
             <label>
               Age (months)
-              <input
-                type="number"
-                min="0"
-                max="1200"
-                value={age}
-                onChange={(event) => setAge(event.target.value)}
-              />
+              <input type="number" min="0" max="1200" value={age} onChange={(event) => setAge(event.target.value)} />
             </label>
 
             <label>
               Listing type
-              <select
-                value={listingType}
-                onChange={(event) => setListingType(event.target.value)}
-              >
+              <select value={listingType} onChange={(event) => setListingType(event.target.value)}>
                 <option value="SELL">Sell</option>
                 <option value="DONATE">Donate</option>
               </select>
@@ -830,28 +901,15 @@ const savedAnalysisFallback = {
 
             <label className="wide-field">
               Description
-              <textarea
-                maxLength="1000"
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-                placeholder="Describe your item's condition and details."
-              />
+              <textarea maxLength="1000" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Describe your item's condition and details." />
             </label>
 
             <label className="wide-field">
               Image URL (optional)
-              <input
-                type="url"
-                value={imageUrl}
-                onChange={(event) => setImageUrl(event.target.value)}
-                placeholder="https://..."
-              />
+              <input type="url" value={imageUrl} onChange={(event) => setImageUrl(event.target.value)} placeholder="https://..." />
             </label>
 
-            <button
-              className="primary-button submit-button"
-              type="submit"
-            >
+            <button className="primary-button submit-button" type="submit">
               ＋ Publish listing
             </button>
           </form>
@@ -859,27 +917,16 @@ const savedAnalysisFallback = {
           {notice && (
             <div className="notice" role="status">
               {notice}
-              <button
-                onClick={() => setNotice("")}
-                aria-label="Dismiss message"
-              >
-                ×
-              </button>
+              <button onClick={() => setNotice("")} aria-label="Dismiss message">×</button>
             </div>
           )}
         </section>
 
         <section className="chat-section section">
           <div>
-            <span className="eyebrow">
-              A LITTLE GUIDANCE GOES A LONG WAY
-            </span>
-            <h2>
-              Ask our <span>sustainability assistant</span>
-            </h2>
-            <p>
-              Have a question about reuse, recycling, or responsible disposal?
-            </p>
+            <span className="eyebrow">A LITTLE GUIDANCE GOES A LONG WAY</span>
+            <h2>Ask our <span>sustainability assistant</span></h2>
+            <p>Have a question about reuse, recycling, or responsible disposal?</p>
           </div>
 
           <div className="chat-card">
@@ -890,27 +937,20 @@ const savedAnalysisFallback = {
                 <small>Demo guidance · Live AI connection pending</small>
               </div>
             </div>
-
             <div className="chat-messages">
               {chatMessages.map((message, index) => (
-                <div
-                  className={`chat-message ${message.from}`}
-                  key={index}
-                >
+                <div className={`chat-message ${message.from}`} key={index}>
                   {message.text}
                 </div>
               ))}
             </div>
-
             <form className="chat-form" onSubmit={handleChat}>
               <input
                 value={chatInput}
                 onChange={(event) => setChatInput(event.target.value)}
                 placeholder="Ask how to reuse an item..."
               />
-              <button type="submit" aria-label="Send message">
-                ↑
-              </button>
+              <button type="submit" aria-label="Send message">↑</button>
             </form>
           </div>
         </section>
@@ -919,14 +959,9 @@ const savedAnalysisFallback = {
       <footer className="footer">
         <a className="brand" href="#home">
           <span className="brand-icon">♻</span>
-          <span>
-            AI Circular <b>Connect</b>
-          </span>
+          <span>AI Circular <b>Connect</b></span>
         </a>
-
-        <p>
-          Give products a second life. Build a more circular future. 🌱
-        </p>
+        <p>Give products a second life. Build a more circular future. 🌱</p>
         <span>Designed for a more sustainable tomorrow.</span>
       </footer>
     </div>
