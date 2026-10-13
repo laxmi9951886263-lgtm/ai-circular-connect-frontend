@@ -2,9 +2,10 @@
 import { useEffect, useState } from "react";
 import "./App.css";
 
- const API = "http://localhost:8081/api/products";
-const CLASSIFIER_API = "http://localhost:8081/api/classifier/analyze";
-const IMAGE_API = "http://localhost:8081/api/items";
+ 
+const API = "https://ai-circular-connect-backend-1.onrender.com/api/products";
+const CLASSIFIER_API = "https://ai-circular-connect-backend-1.onrender.com/api/classifier/analyze";
+const IMAGE_API = "https://ai-circular-connect-backend-1.onrender.com/api/items";
 
 const categories = [
   "All",
