@@ -10,6 +10,8 @@ const IMAGE_API =
   "https://ai-circular-connect-backend-1.onrender.com/api/items";
 const AUTH_API =
   "https://ai-circular-connect-backend-1.onrender.com/api/auth";
+const CHAT_API =
+  "https://ai-circular-connect-backend-1.onrender.com/api/chat";
 
 const categories = [
   "All",
@@ -430,7 +432,9 @@ function App() {
     });
   }
 
-  function handleChat(event) {
+  const [chatLoading, setChatLoading] = useState(false);
+
+  async function handleChat(event) {
     event.preventDefault();
 
     const question = chatInput.trim();
@@ -439,13 +443,38 @@ function App() {
     setChatMessages((current) => [
       ...current,
       { from: "user", text: question },
-      {
-        from: "bot",
-        text: "Try reusing functional items, donating useful products, and checking local recycling guidance for damaged items. Live AI chatbot integration is still pending.",
-      },
     ]);
-
     setChatInput("");
+    setChatLoading(true);
+
+    try {
+      const response = await fetch(CHAT_API, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: question }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(data.message || "Chat request failed.");
+      }
+
+      setChatMessages((current) => [
+        ...current,
+        { from: "bot", text: data.reply },
+      ]);
+    } catch {
+      setChatMessages((current) => [
+        ...current,
+        {
+          from: "bot",
+          text: "Sorry, I couldn't connect to the assistant right now. Try reusing functional items, donating useful products, and checking local recycling guidance.",
+        },
+      ]);
+    } finally {
+      setChatLoading(false);
+    }
   }
 
   const formatPrice = (value) =>
@@ -825,7 +854,6 @@ function App() {
                 <p><strong>Classification:</strong> {analysisResult.classification}</p>
                 <p><strong>Estimated value:</strong> ₹{analysisResult.estimatedValueInr}</p>
                 <p><strong>Reason:</strong> {analysisResult.reason}</p>
-                <p><strong>Saved item ID:</strong> {analysisResult.savedItemId}</p>
                 {analysisResult.savedItemId && (
                   <img
                     className="analyzed-image"
@@ -934,7 +962,7 @@ function App() {
               <span>🌱</span>
               <div>
                 <b>Circular Assistant</b>
-                <small>Demo guidance · Live AI connection pending</small>
+                <small>Powered by Gemini AI · Ask about reuse &amp; recycling</small>
               </div>
             </div>
             <div className="chat-messages">
@@ -943,14 +971,20 @@ function App() {
                   {message.text}
                 </div>
               ))}
+              {chatLoading && (
+                <div className="chat-message bot">
+                  <span className="chat-typing">Thinking…</span>
+                </div>
+              )}
             </div>
             <form className="chat-form" onSubmit={handleChat}>
               <input
                 value={chatInput}
                 onChange={(event) => setChatInput(event.target.value)}
                 placeholder="Ask how to reuse an item..."
+                disabled={chatLoading}
               />
-              <button type="submit" aria-label="Send message">↑</button>
+              <button type="submit" aria-label="Send message" disabled={chatLoading}>↑</button>
             </form>
           </div>
         </section>

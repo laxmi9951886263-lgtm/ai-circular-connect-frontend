@@ -1072,3 +1072,15 @@ a:focus-visible {
     font-size: 24px;
   }
 }
+
+/* Chat typing indicator */
+.chat-typing {
+  display: inline-block;
+  opacity: 0.6;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.4; }
+  50%       { opacity: 1; }
+}
